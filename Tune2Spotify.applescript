@@ -1,41 +1,42 @@
-﻿------------------------------------------------------------------------------------------------------------------
+(*
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*)
+
+------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------
 -- Search Spotify in iTunes
 --
 -- By Sander Datema (sanderdatema@gmail.com)
 --
--- Purpose: mark songs in an iTunes playlist with spotify_true, spotify_false or spotify_multiple
--- These tags will be added to the end of the notes field of each song.
--- Note that double spaces will be removed from your notes!
+-- Purpose: put songs in iTunes playlists based on whether they are in Spotify or not
 --
 --
 -- If you like this script, please consider buying me a beer or coffee: http://j.mp/c8veE2
--- Thanks!
+-- A lot of time went into these 500+ lines of code, so I'd appreciate it. Thanks!
+--
+-- Found bugs? Have a request, etc.? Here please: http://j.mp/bEyTxM
+--
+------------------------------------------------------------------------------------------------------------------
+-- Note: this script depends on XML Tools by Late Night Software: http://j.mp/d9JvNR. Download it from there.
+------------------------------------------------------------------------------------------------------------------
 --
 -- Please edit the options below to your needs.
 ------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------
 
-------------------------------------------------------------------------------------------------------------------
--- Note: this script depends on XML Tools by Late Night Software: http://j.mp/d9JvNR
-------------------------------------------------------------------------------------------------------------------
-
--- If you don't want a file with a list of all the found Spotify links, set this to false
-property makeSpotifyLinkList : true
-
--- If you don't want the spotify_tags to be added to your songs, set this to false
-property addSpotifyTagsToiTunes : true
-
 -- Fuzzy search, set false to not include the album in the search
 property useAlbumInSearch : true
-
--- Set to true if you want to reprocess songs that already have a spotify_tag
-property reprocessTagged : false
-
--- Set this to true if you want the script to remove all the spotify_tags from the selected playlist
--- The script will not search Spotify if you set this to true
--- Note: all spotify_tags will be removed from the selected playlist!
-property removeAllTags : true
 
 
 ------------------------------------------------------------------------------------------------------------------
@@ -43,48 +44,44 @@ property removeAllTags : true
 -- Nothing to edit after this line.
 ------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------
-global songsProcessed
-global tagTrueCount
-global tagFalseCount
-global tagMultipleCount
-global spotifyLinksCount
-global removedTagsCount
-global songsSkipped
-global spotifyLinkList
+
+-- File containing the Spotify links
+global spotifyLinkFile
+
+-- Country of the user
 global countryToCheck
 
-property theTagList : {"spotify_false", "spotify_multiple", "spotify_true"}
+-- Spotify's search API url
 property spotifySearchUrl : "http://ws.spotify.com/search/1/track?q="
 
--- DEBUG
-property debugging : true
+-- Names of the playlists we'll use in iTunes
+property oneMatchPlaylist : "1. One match"
+property multipleMatchPlaylist : "2. Multiple matches"
+property noMatchPlaylist : "3. No match"
 
-my main()
-on main()
-	logEvent("====================================================================")
-	logEvent("============= Start of Debug Session ===============================")
-	logEvent("====================================================================")
-	
-	
-	-- First a few checks. If it fails, the script will end.
-	logEvent("Start checkups.")
-	my startupCheck()
-	logEvent("Checkup ok.")
-	
-	-- Now lookup every song in the playlist on Spotify or remove all the tags
-	my processSelectedSongs(getSelection())
-	
-	-- Done! :)
-	displayEndMessage()
-	
-	-- If you like it, please donate!
-	showDonateDialog()
-	
-	-- End of debugging
-	logEvent("====================================================================")
-	logEvent("=============== End of Debug Session ===============================")
-	logEvent("====================================================================")
-end main
+-- Names of searchMode buttons
+property buttonSpotify : "Spotify links"
+property buttonPlaylists : "iTunes playlists"
+property buttonBoth : "Both"
+
+-- Preparing these 3 variables as lists
+global oneMatchList
+global multipleMatchList
+global noMatchList
+
+-- Make Spotify file, playlists in iTunes or both?
+global searchMode
+
+-- DEBUG
+property debugging : false -- no logging when set to false
+
+try
+	my main()
+on error errorTxt
+	display dialog "Something went wrong: " & errorTxt & " Please report to sanderdatema@gmail.com" buttons {"OK"}
+end try
+
+
 
 ------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------
@@ -92,35 +89,52 @@ end main
 ------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------
 
--- If this check fails, the script will end.
-on startupCheck()
-	-- If addSpotifyTagsToiTunes, makeSpotifyLinkList and removeAllTags are all false, there's nothing to do!
-	if (addSpotifyTagsToiTunes is false and makeSpotifyLinkList is false and removeAllTags is false) then
-		display dialog "There is nothing for me to do! You set all options to false." buttons {"Oops"} default button 1
-		exitScript()
+-- The main routine
+on main()
+	-- First a few checks. If it fails, the script will end.
+	startupCheck()
+	
+	-- Now lookup every song in the playlist on Spotify, or use the selection in iTunes
+	lookupSongs(getSelection())
+	
+	-- Remove any duplicates from the three playlists
+	if searchMode is buttonBoth or searchMode is buttonPlaylists then
+		removeDuplicateTracksFromPlaylist(oneMatchPlaylist)
+		removeDuplicateTracksFromPlaylist(multipleMatchPlaylist)
+		removeDuplicateTracksFromPlaylist(noMatchPlaylist)
 	end if
 	
-	-- Reset all counters
-	set songsProcessed to 0
-	set tagTrueCount to 0
-	set tagFalseCount to 0
-	set tagMultipleCount to 0
-	set spotifyLinksCount to 0
-	set songsSkipped to 0
-	set removedTagsCount to 0
+	-- If you like the script, please donate!
+	showDonateDialog()
+	
+end main
+
+-- If this check fails, the script will end.
+on startupCheck()
+	-- Check if iTunes is running
+	tell application "Finder"
+		if (name of every process) does not contain "iTunes" then
+			display dialog "iTunes is not running. Please start it before running this script." buttons {"OK"}
+			my exitScript()
+		end if
+	end tell
+	
+	-- Make Spotify link list, add songs to playlists in iTunes or both?
+	set searchMode to showChoiceDialog()
 	
 	-- Find which country we are in
 	set countryToCheck to getCountryFromIP()
-end startupCheck
-
--- Decide what to do with the selected songs
-on processSelectedSongs(trackList)
-	if removeAllTags is true then
-		my removeAllTagsFromSelection(trackList)
-	else
-		my lookupSongs(trackList)
+	
+	-- To add the Spotify links to a file, make the new file first
+	if searchMode is buttonBoth or searchMode is buttonSpotify then
+		my createSpotifyLinkListFile()
 	end if
-end processSelectedSongs
+	
+	-- Create (if needed) the special playlists in iTunes
+	if searchMode is buttonBoth or searchMode is buttonPlaylists then
+		my createiTunesPlaylists()
+	end if
+end startupCheck
 
 -- Lookup songs in Spotify from given selection of songs
 on lookupSongs(trackList)
@@ -129,41 +143,33 @@ on lookupSongs(trackList)
 		set originalIndex to fixed indexing
 		set fixed indexing to true
 		
-		-- To add the Spotify links to a file, make the new file first
-		if makeSpotifyLinkList is true then my createSpotifyLinkListFile()
 		
 		-- Go through every single song
 		repeat with thisTrack in trackList
-			my logEvent("--------------------")
-			
 			-- Constructing search query
 			-- If fuzzy search is selected we need to remove some data in the search query
 			set songAlbum to thisTrack's album
-			if useAlbumInSearch is false then set songAlbum to ""
-			set query to thisTrack's name & " " & songArtist & " " & songAlbum
 			
-			my logEvent("Processing song \"" & thisTrack's name & "\" by \"" & thisTrack's artist & "\" on \"" & thisTrack's album & "\"")
+			set searchQuery to my createSearchQuery(thisTrack's name, thisTrack's artist, thisTrack's album)
 			
-			-- Check for spotify_tags already in the song
-			set hasTags to my checkForTags(thisTrack's comment)
-			
-			if hasTags is true and reprocessTagged is false and makeSpotifyLinkList is false then
-				my logEvent("Song already tagged, skipping")
-				set songsSkipped to songsSkipped + 1
-			else -- Search the song in Spotify
-				set searchResult to my searchSong(query)
-				if searchResult is not false then -- if false, then an error occured.
-					set thisTrack's comment to my addSpotifyTagsToTrack(searchResult, thisTrack's comment)
-					my addSpotifyLinksToFile(searchResult)
-				else
-					-- Just skip this song
-					my logEvent("\"" & thisTrack's name & "\" was skipped. Error?")
-					set songsSkipped to songsSkipped + 1
+			set spotifySearchResult to my searchSong(searchQuery)
+			if spotifySearchResult is not false then -- if false, then an error occured.
+				if searchMode is buttonBoth or searchMode is buttonPlaylists then
+					if (count of spotifySearchResult) is 1 then -- One match found in Spotify
+						duplicate thisTrack to playlist oneMatchPlaylist
+					else if (count of spotifySearchResult) > 1 then -- Two or more matches found in Spotify
+						duplicate thisTrack to playlist multipleMatchPlaylist
+					else -- No match found
+						duplicate thisTrack to playlist noMatchPlaylist
+					end if
 				end if
+				if searchMode is buttonBoth or searchMode is buttonSpotify then
+					my addSpotifyLinksToFile(spotifySearchResult)
+				end if
+			else
+				-- Just skip this song
+				my logEvent("\"" & thisTrack's name & "\" was skipped. Error?")
 			end if
-			
-			set songsProcessed to songsProcessed + 1
-			my logEvent("--------------------")
 		end repeat
 		
 		-- Put indexing back to what it was
@@ -171,73 +177,43 @@ on lookupSongs(trackList)
 	end tell
 end lookupSongs
 
--- Add the Spotify links to a file if configured to do so
-on addSpotifyLinksToFile(songData)
-	if makeSpotifyLinkList is false or (count of songData) is 0 then return
+-- Construct the search query
+on createSearchQuery(songTrack, songArtist, songAlbum)
+	set unwantedCharacters to {"[", "]", "'", "&", "{", "}", "!", "@", "$", "#", "%", "?", "/", "\"", "++", "-"}
 	
+	-- Remove unwanted characters
+	set songTrack to removeCharacters(unwantedCharacters, songTrack)
+	set songArtist to removeCharacters(unwantedCharacters, songArtist)
+	set songAlbum to removeCharacters(unwantedCharacters, songAlbum)
+	
+	-- Replace spaces with plus signs
+	set songTrack to replaceText(" ", "+", songTrack)
+	set songArtist to replaceText(" ", "+", songArtist)
+	set songAlbum to replaceText(" ", "+", songAlbum)
+	
+	-- Now combine the items into one query
+	set searchQuery to "track:" & songTrack
+	set searchQuery to searchQuery & "+artist:" & songArtist
+	-- Should we use the Album in the search?
+	if useAlbumInSearch is true then set searchQuery to searchQuery & "+album:" & songAlbum
+	
+	return searchQuery
+end createSearchQuery
+
+-- Add the Spotify links to a file
+on addSpotifyLinksToFile(songData)
+	if (count of songData) < 1 then return
 	set songSpotifyLink to item 1 of songData
 	my logEvent("Adding Spotify link \"" & songSpotifyLink & "\" to file")
-	tell application "TextEdit"
-		make new paragraph at end of text of spotifyLinkList with data songSpotifyLink & return
-	end tell
-	set spotifyLinksCount to spotifyLinksCount + 1
+	do shell script "echo " & songSpotifyLink & " >> " & spotifyLinkFile
 end addSpotifyLinksToFile
-
--- Add the spotify_tag to the track if configured to do so
-on addSpotifyTagsToTrack(songData, targetComment)
-	if addSpotifyTagsToiTunes is false then return
-	
-	if (count of songData) is 1 then -- One match found in Spotify
-		my logEvent("Processing single match")
-		return addTag("spotify_true", targetComment)
-		set tagTrueCount to tagTrueCount + 1
-	else if (count of songData) > 1 then -- Two or more matches found in Spotify
-		my logEvent("Processing multiple matches")
-		return addTag("spotify_multiple", targetComment)
-		set tagMultipleCount to tagMultipleCount + 1
-	else if (count of songData) is 0 then -- No match found
-		my logEvent("Processing no match")
-		set tagFalseCount to tagFalseCount + 1
-		return addTag("spotify_false", targetComment)
-	end if
-end addSpotifyTagsToTrack
-
--- Remove all spotify_tags from selected tracks
-on removeAllTagsFromSelection(trackList)
-	tell application "iTunes"
-		-- Preserve indexing (in case of smart playlists that change)
-		set oldfi to fixed indexing
-		set fixed indexing to true
-		
-		-- Go through every single song
-		repeat with thisTrack in trackList
-			set songComment to my splitText(" ", thisTrack's comment)
-			
-			set songComment to my removeItemsFromList(theTagList, songComment) -- Remove spotify_tags if present.
-			
-			set thisTrack's comment to my joinList(" ", songComment)
-			set songsProcessed to songsProcessed + 1
-			set removedTagsCount to removedTagsCount + 1
-		end repeat
-		-- Put indexing back to what it was
-		set fixed indexing to oldfi
-	end tell
-end removeAllTagsFromSelection
 
 -- Search Spotify for the given words
 on searchSong(searchQuery)
-	set searchQuery to my splitText(" ", searchQuery) -- Convert string to list
-	-- And put it all back together again
-	set searchQuery to my joinList("+", searchQuery) -- Use + as the delimiter
-	-- Remove illegal characters that curl doesn't like
-	set searchQuery to my stripIllegalCharacters({"[", "]", "'", "&", "{", "}", "!", "@", "$", "#", "%", "?", "/", "\"", "++"}, searchQuery)
-	
 	set searchUrl to spotifySearchUrl & searchQuery
 	my logEvent("Search url is \"" & searchUrl & "\"")
 	
 	-- Use curl to fetch the xml results from Spotify's metadata API
-	-- Only 10 requests per second are allowed, so we delay at least a 10th of a second
-	delay 0.1
 	set xmlResult to do shell script "curl " & quoted form of searchUrl
 	
 	if xmlResult is "" then -- No XML was returned!
@@ -246,7 +222,12 @@ on searchSong(searchQuery)
 	end if
 	
 	-- Use the XML Tools by Late Night Software
-	set xmlResult to parse XML xmlResult
+	try
+		set xmlResult to parse XML xmlResult
+	on error errTxt
+		logEvent("Error in XML parsing")
+		return false
+	end try
 	my logEvent("Parsing XML")
 	
 	-- How many results did we get?
@@ -269,13 +250,11 @@ on searchSong(searchQuery)
 	
 	if resultCount = 1 then -- Found one match
 		set searchResult to {getSpotifyLink(trackData)}
-		my logEvent("One match, returning result")
 		return searchResult
 	else if resultCount > 1 then -- Multiple matches found
 		set searchResult to {}
 		set trackList to my getElements(xmlResult, "track")
 		
-		my logEvent("Multiple results, extracting tracks now")
 		-- Sort songs by popularity
 		repeat with trackData in trackList
 			set itemPopularity to getElementValue(getAnElement(trackData, "popularity"))
@@ -295,8 +274,6 @@ on searchSong(searchQuery)
 			set end of newSearchResult to itemSpotifyLink
 		end repeat
 		
-		my logEvent("Most popular track link: \"" & item 1 of newSearchResult & "\"")
-		my logEvent("Returning result of multiple tracks")
 		return newSearchResult
 	end if
 end searchSong
@@ -310,7 +287,7 @@ on splitText(delimiter, someText)
 	return output
 end splitText
 
--- Convert givenlist to a string
+-- Convert given list to a string
 on joinList(delimiter, someList)
 	set prevTIDs to AppleScript's text item delimiters
 	set AppleScript's text item delimiters to delimiter
@@ -319,9 +296,8 @@ on joinList(delimiter, someList)
 	return output
 end joinList
 
+-- Find and return a particular element (this presumes there is only one instance of the element)
 on getAnElement(theXML, theElementName)
-	-- find and return a particular element (this presumes there is only one instance of the element)
-	
 	repeat with anElement in XML contents of theXML
 		if class of anElement is XML element and XML tag of anElement is theElementName then
 			return contents of anElement
@@ -331,6 +307,7 @@ on getAnElement(theXML, theElementName)
 	return missing value
 end getAnElement
 
+-- Return the value of an element
 on getElementValue(theXML)
 	if theXML is missing value or theXML is {} then
 		return ""
@@ -345,6 +322,7 @@ on getElementValue(theXML)
 	end if
 end getElementValue
 
+-- Get the Spotify link of a Spotify song
 on getSpotifyLink(trackXML)
 	try
 		return href of XML attributes of trackXML
@@ -353,15 +331,13 @@ on getSpotifyLink(trackXML)
 	end try
 end getSpotifyLink
 
+-- Find and return all instances of a particular element
 on getElements(theXML, theElementName)
-	-- find and return all instatnces of a particular element
-	
 	local theResult
 	
 	set theResult to {}
 	repeat with anElement in XML contents of theXML
-		if class of anElement is XML element and ¬
-			XML tag of anElement is theElementName then
+		if class of anElement is XML element and XML tag of anElement is theElementName then
 			set end of theResult to contents of anElement
 		end if
 	end repeat
@@ -394,45 +370,18 @@ on replaceText(find, replace, subject)
 end replaceText
 
 -- Strip given character from given string
-on stripIllegalCharacters(theCharacters, theString)
+on removeCharacters(theCharacters, theString)
 	repeat with theCharacter in theCharacters
 		set theString to my replaceText(theCharacter, "", theString)
 	end repeat
 	
 	return theString
-end stripIllegalCharacters
+end removeCharacters
 
 -- Exit the script as if the user cancelled it
 on exitScript()
 	error number -128
 end exitScript
-
--- Add a spotify_tag to the song's comment
-on addTag(theTag, theString)
-	set theList to my splitText(" ", theString)
-	
-	set theCurrentTagList to removeItemsFromList(theTag, theTagList) -- Remove the needed tag from the unwanted list	
-	set theList to my removeItemsFromList(theCurrentTagList, theList) -- Remove spotify_tags if present.
-	
-	if theList does not contain theTag then -- No need to add it twice
-		logEvent("Tag " & theTag & " was not in the list, so adding now")
-		set end of theList to theTag -- Add the tag
-	else
-		logEvent("Tag " & theTag & " was already in the list, not adding again")
-	end if
-	return joinList(" ", theList)
-end addTag
-
--- Check for existence of the spotify_tags in the given string
-on checkForTags(theString)
-	set theList to my splitText(" ", theString)
-	repeat with theTag in theTagList
-		if theList contains theTag then
-			return true
-		end if
-	end repeat
-	return false
-end checkForTags
 
 -- Sort ascending
 on sortListASC(theList)
@@ -461,65 +410,17 @@ on sortList(theList, ascending)
 	return newList
 end sortList
 
--- Round up and show stats of current operation
-on displayEndMessage()
-	set lineBreak to return
-	
-	set songWord to pluralize("song", songsProcessed)
-	set line1 to "Total " & songWord & " processed: " & songsProcessed
-	logEvent(line1)
-	
-	set songWord to pluralize("song", songsSkipped)
-	set line1a to songsSkipped & " " & songWord & " skipped."
-	logEvent(line1a)
-	
-	set songWord to pluralize("song", tagFalseCount)
-	set line2 to tagFalseCount & " " & songWord & " could not be found."
-	logEvent(line2)
-	
-	set songWord to pluralize("song", tagTrueCount)
-	set line3 to tagTrueCount & " " & songWord & " had one match."
-	logEvent(line3)
-	
-	set songWord to pluralize("song", tagMultipleCount)
-	set line4 to tagMultipleCount & " " & songWord & " had multiple matches."
-	logEvent(line4)
-	
-	set songWord to pluralize("song", spotifyLinksCount)
-	set linkWord to pluralize("link", spotifyLinksCount)
-	set line5 to spotifyLinksCount & " Spotify " & linkWord & " put in a textfile."
-	logEvent(line5)
-	
-	set songWord to pluralize("song", removedTagsCount)
-	set line6 to removedTagsCount & " " & songWord & " stripped of spotify_tags."
-	logEvent(line6)
-	
-	tell application "iTunes"
-		if removeAllTags is true then
-			display dialog line1 & lineBreak & lineBreak & line6 buttons {"Ok, thanks!"} default button 1
-		else
-			display dialog line1 & lineBreak & line1a & lineBreak & line2 & lineBreak & line3 & lineBreak & line4 & lineBreak & line5 & lineBreak & line6 buttons {"Ok, thanks!"} default button 1
-		end if
-	end tell
-end displayEndMessage
-
--- Pluralize the given word (simple version)
-on pluralize(itemWord, itemCount)
-	if itemCount > 1 or itemCount = 0 then
-		return itemWord & "s"
-	else
-		return itemWord
-	end if
-end pluralize
-
 -- Show the dialog asking people to donate
 on showDonateDialog()
+	if readPreference("hasDonated") is "yes" then return
 	tell application "iTunes"
 		set question to display dialog "If you like this Spot-in-iTunes script, please consider buying me a beer or a coffee. I'd appreciate that!" buttons {"Yeah, why not?", "I don't like this script", "I already donated"} default button 1
 		set answer to button returned of question
 	end tell
 	if answer is equal to "Yeah, why not?" then
 		open location "http://j.mp/c8veE2"
+	else if answer is equal to "I already donated" then
+		savePreference("hasDonated", "yes")
 	end if
 end showDonateDialog
 
@@ -527,7 +428,7 @@ end showDonateDialog
 -- From leenoble_uk (http://j.mp/b1CmVH)
 on logEvent(themessage)
 	if debugging is false then return
-	set themessage to my stripIllegalCharacters({"[", "]", "'", "{", "}", "!", "@", "$", "#", "%", "?", "(", ")"}, themessage)
+	set themessage to my removeCharacters({"[", "]", "'", "{", "}", "!", "@", "$", "#", "%", "(", ")", "`"}, themessage)
 	set theLine to (do shell script "date  +'%Y-%m-%d %H:%M:%S'" as string) & " " & themessage
 	do shell script "echo " & theLine & " >> ~/Library/Logs/AppleScript-events.log"
 end logEvent
@@ -552,14 +453,14 @@ on getSelection()
 	end tell
 end getSelection
 
+-- Create the file with a list of Spotify links
 on createSpotifyLinkListFile()
-	tell application "TextEdit"
-		my logEvent("Creating new Spotify playlist document")
-		set spotifyLinkList to make new document
-	end tell
+	set dateString to (do shell script "date +%s") as string
+	set spotifyLinkFile to "~/Desktop/Tune2Spotify-" & dateString & ".txt"
 end createSpotifyLinkListFile
 
 -- From Kevin Bradley (http://j.mp/assMpB)
+-- Change case of given text to lower case
 on makelower(theText)
 	set newText to ""
 	--loop through the letters
@@ -571,6 +472,7 @@ on makelower(theText)
 	return newText
 end makelower
 
+-- Change case of given letter to lower case
 on lower(aLetter)
 	--see if the letter is in list of upper case letters
 	considering case
@@ -585,6 +487,7 @@ on lower(aLetter)
 	end considering
 end lower
 
+-- Change case of given text to upper case
 on makeUPPER(theText)
 	set newText to ""
 	--loop through the letters
@@ -596,6 +499,7 @@ on makeUPPER(theText)
 	return newText
 end makeUPPER
 
+-- Change case of given letter to upper case
 on upper(aLetter)
 	--see if the letter is in list of lower case letters
 	considering case
@@ -610,6 +514,7 @@ on upper(aLetter)
 	end considering
 end upper
 
+-- Find out in which country the user resides by using the IP address
 on getCountryFromIP()
 	-- Get IP address of client
 	set ipAddress to do shell script "curl ifconfig.me"
@@ -640,3 +545,89 @@ on getCountryFromIP()
 	my logEvent("Country to use when searching Spotify: " & country)
 	return country
 end getCountryFromIP
+
+-- Simply create the three playlists this script uses in iTunes
+on createiTunesPlaylists()
+	createiTunesPlaylist(oneMatchPlaylist, "Tune2Spotify")
+	createiTunesPlaylist(multipleMatchPlaylist, "Tune2Spotify")
+	createiTunesPlaylist(noMatchPlaylist, "Tune2Spotify")
+end createiTunesPlaylists
+
+-- Create a playlist in iTunes if it not already exists
+on createiTunesPlaylist(playlistName, folderName)
+	tell application "iTunes"
+		if exists playlist playlistName then
+			return
+		else
+			if length of folderName > 0 then
+				createiTunesFolder(folderName)
+				make new user playlist at (folder playlist folderName) with properties {name:playlistName}
+			else
+				make new user playlist with properties {name:playlistName}
+			end if
+		end if
+	end tell
+end createiTunesPlaylist
+
+-- Create a folder in iTunes if it not already exists
+on createiTunesFolder(folderName)
+	tell application "iTunes"
+		if not (exists folder playlist folderName) then
+			make new folder playlist with properties {name:folderName}
+		end if
+	end tell
+end createiTunesFolder
+
+-- Save a value to the given preference
+on savePreference(prefName, prefValue)
+	do shell script "defaults write com.sanderdatema.tune2spotify " & prefName & " " & prefValue
+end savePreference
+
+-- Read a value from the given preference
+on readPreference(prefName)
+	try
+		return do shell script "defaults read com.sanderdatema.tune2spotify " & prefName
+	on error errTxt
+		return false
+	end try
+end readPreference
+
+-- Remove duplicate tracks. Based on Doug's Applescript. http://j.mp/hZp8sR
+on removeDuplicateTracksFromPlaylist(selectedPlaylist)
+	tell application "iTunes"
+		set myPlaylist to playlist selectedPlaylist
+		set all_tracks to the number of myPlaylist's tracks
+		set temp1 to {}
+		set To_Go to {}
+		
+		repeat with i from 1 to all_tracks
+			set this_dbid to the database ID of track i of myPlaylist
+			
+			if this_dbid is in temp1 then -- if this database id is already in our collection...
+				copy i to end of To_Go -- then this track is a dupe; copy its index to our To_Go list
+			else -- if not, it's first time we've seen track, so...
+				copy this_dbid to end of temp1 --put it in our collection
+			end if
+		end repeat
+		-- To_Go now contains indices of tracks which are dupes 
+		
+		-- total number of tracks to nix for dialog
+		set to_nix to To_Go's length
+		
+		--If you must delete, do it backwards, ie: 
+		
+		repeat with x from to_nix to 1 by -1
+			copy (item x of To_Go) to j
+			delete file track j of myPlaylist
+		end repeat
+		
+		set singplur to " entries were "
+		if to_nix = 1 then set singplur to " entry was "
+	end tell
+end removeDuplicateTracksFromPlaylist
+
+on showChoiceDialog()
+	set question to display dialog "Would you like to create a file with Spotify links of your songs, place the songs in iTunes playlists (one match, multiple matches, no match) after searching in Spotify or both?" buttons {buttonSpotify, buttonPlaylists, buttonBoth} default button 3
+	set answer to button returned of question
+	return answer
+end showChoiceDialog
