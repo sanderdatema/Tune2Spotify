@@ -38,6 +38,11 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 -- Fuzzy search, set false to not include the album in the search
 property useAlbumInSearch : true
 
+-- Country, in case of trouble
+property forceCountry : "NL"
+
+-- Skip checking for duplicates in the end?
+property skipDuplicateCheck : true
 
 ------------------------------------------------------------------------------------------------------------------
 ------------------------------------------------------------------------------------------------------------------
@@ -73,7 +78,7 @@ global noMatchList
 global searchMode
 
 -- DEBUG
-property debugging : false -- no logging when set to false
+property debugging : true -- no logging when set to false
 
 try
 	my main()
@@ -98,10 +103,12 @@ on main()
 	lookupSongs(getSelection())
 	
 	-- Remove any duplicates from the three playlists
-	if searchMode is buttonBoth or searchMode is buttonPlaylists then
-		removeDuplicateTracksFromPlaylist(oneMatchPlaylist)
-		removeDuplicateTracksFromPlaylist(multipleMatchPlaylist)
-		removeDuplicateTracksFromPlaylist(noMatchPlaylist)
+	if skipDuplicateCheck is false then
+		if searchMode is buttonBoth or searchMode is buttonPlaylists then
+			removeDuplicateTracksFromPlaylist(oneMatchPlaylist)
+			removeDuplicateTracksFromPlaylist(multipleMatchPlaylist)
+			removeDuplicateTracksFromPlaylist(noMatchPlaylist)
+		end if
 	end if
 	
 	-- If you like the script, please donate!
@@ -123,7 +130,11 @@ on startupCheck()
 	set searchMode to showChoiceDialog()
 	
 	-- Find which country we are in
-	set countryToCheck to getCountryFromIP()
+	if forceCountry is not false then
+		set countryToCheck to forceCountry
+	else
+		set countryToCheck to getCountryFromIP()
+	end if
 	
 	-- To add the Spotify links to a file, make the new file first
 	if searchMode is buttonBoth or searchMode is buttonSpotify then
@@ -146,6 +157,8 @@ on lookupSongs(trackList)
 		
 		-- Go through every single song
 		repeat with thisTrack in trackList
+			-- set trackFile to file track thisTrack
+			-- if trackFile's location is not missing value then
 			-- Constructing search query
 			-- If fuzzy search is selected we need to remove some data in the search query
 			set songAlbum to thisTrack's album
@@ -170,6 +183,7 @@ on lookupSongs(trackList)
 				-- Just skip this song
 				my logEvent("\"" & thisTrack's name & "\" was skipped. Error?")
 			end if
+			-- end if
 		end repeat
 		
 		-- Put indexing back to what it was
