@@ -28,7 +28,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 -- Found bugs? Have a request, etc.? Here please: http://j.mp/bEyTxM
 --
 ------------------------------------------------------------------------------------------------------------------
--- Note: this script depends on XML Tools by Late Night Software: http://j.mp/d9JvNR. Download it from there.
+-- Note: this script depends on XML Tools by Late Night Software: http://bit.ly/18rdmus. Download it from there.
 ------------------------------------------------------------------------------------------------------------------
 --
 -- Please edit the options below to your needs.
